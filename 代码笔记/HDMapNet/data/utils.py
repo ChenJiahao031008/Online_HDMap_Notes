@@ -3,6 +3,7 @@ import numpy as np
 import torch
 
 
+# 比较有意思的处理方式，RT等价于变换矩阵的逆
 def get_proj_mat(intrins, rots, trans):
     K = np.eye(4)
     K[:3, :3] = intrins
@@ -16,7 +17,7 @@ def get_proj_mat(intrins, rots, trans):
 
 def perspective(cam_coords, proj_mat):
     pix_coords = proj_mat @ cam_coords
-    valid_idx = pix_coords[2, :] > 0
+    valid_idx = pix_coords[2, :] > 0  # bool数组
     pix_coords = pix_coords[:, valid_idx]
     pix_coords = pix_coords[:2, :] / (pix_coords[2, :] + 1e-7)
     pix_coords = pix_coords.transpose(1, 0)
@@ -30,6 +31,8 @@ def label_onehot_decoding(onehot):
 def label_onehot_encoding(label, num_classes=4):
     H, W = label.shape
     onehot = torch.zeros((num_classes, H, W))
+    # onehot.scatter_：在指定的索引位置上按照给定的值进行填充
+    # 向tensor中指定dim维度的index位置写入scr所对应的数值，可以用来生成one-hot向量和特定mask
     onehot.scatter_(0, label[None].long(), 1)
     return onehot
 
@@ -37,5 +40,7 @@ def label_onehot_encoding(label, num_classes=4):
 def gen_dx_bx(xbound, ybound, zbound):
     dx = torch.Tensor([row[2] for row in [xbound, ybound, zbound]])
     bx = torch.Tensor([row[0] + row[2] / 2.0 for row in [xbound, ybound, zbound]])
-    nx = torch.LongTensor([(row[1] - row[0]) / row[2] for row in [xbound, ybound, zbound]])
+    nx = torch.LongTensor(
+        [(row[1] - row[0]) / row[2] for row in [xbound, ybound, zbound]]
+    )
     return dx, bx, nx
