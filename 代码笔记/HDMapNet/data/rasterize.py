@@ -16,35 +16,59 @@ def get_patch_coord(patch_box, patch_angle=0.0):
     y_max = patch_y + patch_h / 2.0
 
     patch = box(x_min, y_min, x_max, y_max)
-    patch = affinity.rotate(patch, patch_angle, origin=(patch_x, patch_y), use_radians=False)
+    patch = affinity.rotate(
+        patch, patch_angle, origin=(patch_x, patch_y), use_radians=False
+    )
 
     return patch
 
 
 def get_discrete_degree(vec, angle_class=36):
+    # np.mod: x % y
     deg = np.mod(np.degrees(np.arctan2(vec[1], vec[0])), 360)
     deg = (int(deg / (360 / angle_class) + 0.5) % angle_class) + 1
     return deg
 
 
-def mask_for_lines(lines, mask, thickness, idx, type='index', angle_class=36):
+def mask_for_lines(lines, mask, thickness, idx, type="index", angle_class=36):
     coords = np.asarray(list(lines.coords), np.int32)
     coords = coords.reshape((-1, 2))
     if len(coords) < 2:
         return mask, idx
-    if type == 'backward':
+    # TODO 不明白为什么要反向
+    if type == "backward":
         coords = np.flip(coords, 0)
 
-    if type == 'index':
+    # 这个是同类合并，颜色一致，如果type是index，则idx++
+    if type == "index":
         cv2.polylines(mask, [coords], False, color=idx, thickness=thickness)
         idx += 1
     else:
+        # backward forward
         for i in range(len(coords) - 1):
-            cv2.polylines(mask, [coords[i:]], False, color=get_discrete_degree(coords[i + 1] - coords[i], angle_class=angle_class), thickness=thickness)
+            cv2.polylines(
+                mask,
+                [coords[i:]],
+                False,
+                # get_discrete_degree: 计算朝向
+                color=get_discrete_degree(
+                    coords[i + 1] - coords[i], angle_class=angle_class
+                ),
+                thickness=thickness,
+            )
     return mask, idx
 
 
-def line_geom_to_mask(layer_geom, confidence_levels, local_box, canvas_size, thickness, idx, type='index', angle_class=36):
+def line_geom_to_mask(
+    layer_geom,
+    confidence_levels,
+    local_box,
+    canvas_size,
+    thickness,
+    idx,
+    type="index",
+    angle_class=36,
+):
     patch_x, patch_y, patch_h, patch_w = local_box
 
     patch = get_patch_coord(local_box)
@@ -59,6 +83,7 @@ def line_geom_to_mask(layer_geom, confidence_levels, local_box, canvas_size, thi
 
     map_mask = np.zeros(canvas_size, np.uint8)
 
+    # 遍历每个类别的所有line
     for line in layer_geom:
         if isinstance(line, tuple):
             line, confidence = line
@@ -66,35 +91,50 @@ def line_geom_to_mask(layer_geom, confidence_levels, local_box, canvas_size, thi
             confidence = None
         new_line = line.intersection(patch)
         if not new_line.is_empty:
-            new_line = affinity.affine_transform(new_line, [1.0, 0.0, 0.0, 1.0, trans_x, trans_y])
-            new_line = affinity.scale(new_line, xfact=scale_width, yfact=scale_height, origin=(0, 0))
+            new_line = affinity.affine_transform(
+                new_line, [1.0, 0.0, 0.0, 1.0, trans_x, trans_y]
+            )
+            new_line = affinity.scale(
+                new_line, xfact=scale_width, yfact=scale_height, origin=(0, 0)
+            )
             confidence_levels.append(confidence)
-            if new_line.geom_type == 'MultiLineString':
+            # type1 == 'index', type2 == ''
+            if new_line.geom_type == "MultiLineString":
                 for new_single_line in new_line:
-                    map_mask, idx = mask_for_lines(new_single_line, map_mask, thickness, idx, type, angle_class)
+                    map_mask, idx = mask_for_lines(
+                        new_single_line, map_mask, thickness, idx, type, angle_class
+                    )
             else:
-                map_mask, idx = mask_for_lines(new_line, map_mask, thickness, idx, type, angle_class)
+                map_mask, idx = mask_for_lines(
+                    new_line, map_mask, thickness, idx, type, angle_class
+                )
     return map_mask, idx
 
 
 def overlap_filter(mask, filter_mask):
     C, _, _ = mask.shape
-    for c in range(C-1, -1, -1):
+    for c in range(C - 1, -1, -1):
         filter = np.repeat((filter_mask[c] != 0)[None, :], c, axis=0)
         mask[:c][filter] = 0
 
     return mask
 
 
-def preprocess_map(vectors, patch_size, canvas_size, num_classes, thickness, angle_class):
+def preprocess_map(
+    vectors, patch_size, canvas_size, num_classes, thickness, angle_class
+):
     confidence_levels = [-1]
     vector_num_list = {}
+    # 清空历史
     for i in range(num_classes):
         vector_num_list[i] = []
 
+    # 取出所有的点
     for vector in vectors:
-        if vector['pts_num'] >= 2:
-            vector_num_list[vector['type']].append(LineString(vector['pts'][:vector['pts_num']]))
+        if vector["pts_num"] >= 2:
+            vector_num_list[vector["type"]].append(
+                LineString(vector["pts"][: vector["pts_num"]])
+            )
 
     local_box = (0.0, 0.0, patch_size[0], patch_size[1])
 
@@ -103,14 +143,48 @@ def preprocess_map(vectors, patch_size, canvas_size, num_classes, thickness, ang
     instance_masks = []
     forward_masks = []
     backward_masks = []
+    # 注意，遍历的是类别
     for i in range(num_classes):
-        map_mask, idx = line_geom_to_mask(vector_num_list[i], confidence_levels, local_box, canvas_size, thickness, idx)
+        map_mask, idx = line_geom_to_mask(
+            vector_num_list[i],
+            confidence_levels,
+            local_box,
+            canvas_size,
+            thickness,
+            idx,
+        )
+
         instance_masks.append(map_mask)
-        filter_mask, _ = line_geom_to_mask(vector_num_list[i], confidence_levels, local_box, canvas_size, thickness + 4, 1)
+        filter_mask, _ = line_geom_to_mask(
+            vector_num_list[i],
+            confidence_levels,
+            local_box,
+            canvas_size,
+            thickness + 4,
+            1,
+        )
         filter_masks.append(filter_mask)
-        forward_mask, _ = line_geom_to_mask(vector_num_list[i], confidence_levels, local_box, canvas_size, thickness, 1, type='forward', angle_class=angle_class)
+        forward_mask, _ = line_geom_to_mask(
+            vector_num_list[i],
+            confidence_levels,
+            local_box,
+            canvas_size,
+            thickness,
+            1,
+            type="forward",
+            angle_class=angle_class,
+        )
         forward_masks.append(forward_mask)
-        backward_mask, _ = line_geom_to_mask(vector_num_list[i], confidence_levels, local_box, canvas_size, thickness, 1, type='backward', angle_class=angle_class)
+        backward_mask, _ = line_geom_to_mask(
+            vector_num_list[i],
+            confidence_levels,
+            local_box,
+            canvas_size,
+            thickness,
+            1,
+            type="backward",
+            angle_class=angle_class,
+        )
         backward_masks.append(backward_mask)
 
     filter_masks = np.stack(filter_masks)
@@ -119,10 +193,14 @@ def preprocess_map(vectors, patch_size, canvas_size, num_classes, thickness, ang
     backward_masks = np.stack(backward_masks)
 
     instance_masks = overlap_filter(instance_masks, filter_masks)
-    forward_masks = overlap_filter(forward_masks, filter_masks).sum(0).astype('int32')
-    backward_masks = overlap_filter(backward_masks, filter_masks).sum(0).astype('int32')
+    forward_masks = overlap_filter(forward_masks, filter_masks).sum(0).astype("int32")
+    backward_masks = overlap_filter(backward_masks, filter_masks).sum(0).astype("int32")
 
-    return torch.tensor(instance_masks), torch.tensor(forward_masks), torch.tensor(backward_masks)
+    return (
+        torch.tensor(instance_masks),
+        torch.tensor(forward_masks),
+        torch.tensor(backward_masks),
+    )
 
 
 def rasterize_map(vectors, patch_size, canvas_size, num_classes, thickness):
@@ -132,15 +210,27 @@ def rasterize_map(vectors, patch_size, canvas_size, num_classes, thickness):
         vector_num_list[i] = []
 
     for vector in vectors:
-        if vector['pts_num'] >= 2:
-            vector_num_list[vector['type']].append((LineString(vector['pts'][:vector['pts_num']]), vector.get('confidence_level', 1)))
+        if vector["pts_num"] >= 2:
+            vector_num_list[vector["type"]].append(
+                (
+                    LineString(vector["pts"][: vector["pts_num"]]),
+                    vector.get("confidence_level", 1),
+                )
+            )
 
     local_box = (0.0, 0.0, patch_size[0], patch_size[1])
 
     idx = 1
     masks = []
     for i in range(num_classes):
-        map_mask, idx = line_geom_to_mask(vector_num_list[i], confidence_levels, local_box, canvas_size, thickness, idx)
+        map_mask, idx = line_geom_to_mask(
+            vector_num_list[i],
+            confidence_levels,
+            local_box,
+            canvas_size,
+            thickness,
+            idx,
+        )
         masks.append(map_mask)
 
     return np.stack(masks), confidence_levels

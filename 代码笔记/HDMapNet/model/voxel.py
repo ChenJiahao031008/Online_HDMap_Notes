@@ -7,6 +7,7 @@ def pad_or_trim_to_np(x, shape, pad_val=0):
   shape = np.asarray(shape)
   pad = shape - np.minimum(np.shape(x), shape)
   zeros = np.zeros_like(pad)
+  # np.pad(array，pad_width，mode，**kwargs)
   x = np.pad(x, np.stack([zeros, pad], axis=1), constant_values=pad_val)
   return x[:shape[0], :shape[1]]
 
