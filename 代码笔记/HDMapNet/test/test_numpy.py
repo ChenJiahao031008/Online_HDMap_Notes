@@ -25,9 +25,26 @@ import cv2
 # print("------------------------------------")
 
 
-test = np.array([[1, 1.5], [2, 2.5], [2, 4]])
-b_test = np.array([[True, False], [False, True], [True, True]])
-print(test[b_test])
-test[b_test] = 0
-print(test)
+# test = np.array([[1, 1.5], [2, 2.5], [2, 4]])
+# b_test = np.array([[True, False], [False, True], [True, True]])
+# print(test[b_test])
+# test[b_test] = 0
+# print(test)
+# print("------------------------------------")
+
+#repeat
+coords = np.array([[1, 1.5], [2, 2.5], [2, 4]])
+num_points = coords.shape[0]
+print("repeat :\n", np.repeat(coords[:, None], num_points, 1))
+
+#diff_matrix
+diff_matrix = np.repeat(coords[:, None], num_points, 1) - coords
+print("diff_matrix : \n", diff_matrix)
+
+dist_matrix = np.sqrt(((diff_matrix) ** 2).sum(-1))
+print("dist_matrix : \n", dist_matrix)
+
+direction_matrix = diff_matrix / (dist_matrix.reshape(num_points, num_points, 1) + 1e-6)
+print(dist_matrix.reshape(num_points, num_points, 1))
+print("direction_matrix : \n", direction_matrix)
 print("------------------------------------")

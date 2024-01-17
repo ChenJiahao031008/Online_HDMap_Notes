@@ -156,7 +156,10 @@ class _LaneNetCluster(object):
         db = DBSCAN(eps=self.dbscan_eps, min_samples=self.postprocess_min_samples)
         # db = MeanShift()
         try:
+            # StandardScaler: 通过删除平均值并缩放到单位方差来标准化特征
+            # fit_transform : 先计算出数据的均值和方差，并根据此将数据标准化
             features = StandardScaler().fit_transform(embedding_image_feats)
+            # dbscan 聚类
             db.fit(features)
         except Exception as err:
             # print(err)
@@ -169,8 +172,9 @@ class _LaneNetCluster(object):
             }
             return ret
         db_labels = db.labels_
-        unique_labels = np.unique(db_labels)
 
+        # np.unique()：去除其中重复的元素 ，并按元素由小到大返回一个新的无元素重复的元组或者列表
+        unique_labels = np.unique(db_labels)
         num_clusters = len(unique_labels)
         # cluster_centers = db.components_
 

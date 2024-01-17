@@ -64,12 +64,17 @@ def vectorize(segmentation, embedding, direction, angle_class):
 
         prob = segmentation[i]
         prob[single_class_inst_mask == 0] = 0
+        # TODO 为什么这么做呢
+        ## 通过两个不同方向的池化操作来抑制那些在两个方向上都不显著的像素点
         nms_mask_1 = ((max_pool_1(prob.unsqueeze(0))[0] - prob) < 0.0001).cpu().numpy()
         avg_mask_1 = avg_pool_1(prob.unsqueeze(0))[0].cpu().numpy()
         nms_mask_2 = ((max_pool_2(prob.unsqueeze(0))[0] - prob) < 0.0001).cpu().numpy()
         avg_mask_2 = avg_pool_2(prob.unsqueeze(0))[0].cpu().numpy()
+        # 生成一个垂直方向上的二值掩码，其中的值表示在垂直方向上的平均概率值是否大于水平方向上的平均概率值
         vertical_mask = avg_mask_1 > avg_mask_2
+        # 生成垂直方向上的补集，即水平方向上的二值掩码
         horizontal_mask = ~vertical_mask
+        # 结合了垂直和水平方向的掩码信息，只有当在两个方向上都满足条件时，该位置才为True
         nms_mask = (vertical_mask & nms_mask_1) | (horizontal_mask & nms_mask_2)
 
         for j in range(1, num_inst + 1):

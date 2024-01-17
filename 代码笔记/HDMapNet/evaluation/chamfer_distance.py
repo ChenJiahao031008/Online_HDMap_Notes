@@ -2,7 +2,9 @@ import torch
 
 
 def chamfer_distance(source_pc, target_pc, threshold, cum=False, bidirectional=True):
+    # torch.cdist: 批量计算两个向量集合的距离
     dist = torch.cdist(source_pc.float(), target_pc.float())
+    # 行和列的最小距离
     dist1, _ = torch.min(dist, 2)
     dist2, _ = torch.min(dist, 1)
     if cum:
