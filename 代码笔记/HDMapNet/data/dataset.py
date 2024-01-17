@@ -211,6 +211,9 @@ class HDMapNetSemanticDataset(HDMapNetDataset):
             self.angle_class,
         )
         semantic_masks = instance_masks != 0
+        # torch.any：用于判断是否有true项
+        # ~torch.any：~ 是按位取反操作符，表示每个类别是否都是零
+        # unsqueeze(0) 将结果的维度增加一个维度，使其变为行向量。这是为了与后面的 semantic_masks 进行拼接。
         semantic_masks = torch.cat(
             [(~torch.any(semantic_masks, axis=0)).unsqueeze(0), semantic_masks]
         )

@@ -12,11 +12,22 @@ from .base import CamEncode, BevEncode
 
 
 def cumsum_trick(x, geom_feats, ranks):
+    """
+    对落在同一个单元格的特征进行求和池化: 实际上这个函数并不是cumsum, 而是将重复rank位置的特征进行求和。
+    @ x          : 铺平的context特征, shape为(n,64)
+    @ geom_feats : 铺平的视锥点, shape为(n,3)
+    @ ranks      : 每个点的rank值, shape为(n,)
+    关于这个函数的理解详见: test_cumsum.py 中的演示
+    """
+    # cumsum: 对数组进行累加运算求和
     x = x.cumsum(0)
+    # 获取前/后rank值不相等的索引位置
     kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
+    # 因为之前索引已经进行了排序，所以这个就相当于错位比较
     kept[:-1] = (ranks[1:] != ranks[:-1])
-
+    # 对于具有相同rank值的点，只保留最后一个
     x, geom_feats = x[kept], geom_feats[kept]
+    # 由于前面是对所有点执行累加和，这里进行移位相减，得到具有相同rank值的点的实际特征和
     x = torch.cat((x[:1], x[1:] - x[:-1]))
 
     return x, geom_feats
@@ -57,6 +68,9 @@ class LiftSplat(nn.Module):
         self.grid_conf = grid_conf
         self.data_aug_conf = data_aug_conf
 
+        # dx: 每个维度的离散化步长
+        # bx: 第一个元素加上相应步长一半的张量，然后赋值给 bx。这个张量表示每个维度的起始坐标
+        # nx: 这个张量表示每个维度上的离散化网格的长度
         dx, bx, nx = gen_dx_bx(self.grid_conf['xbound'],
                                               self.grid_conf['ybound'],
                                               self.grid_conf['zbound'],
@@ -77,15 +91,30 @@ class LiftSplat(nn.Module):
         self.use_quickcumsum = True
 
     def create_frustum(self):
+        # 参考：https://zhuanlan.zhihu.com/p/658864347
         # make grid in image plane
         ogfH, ogfW = self.data_aug_conf['final_dim']
+        ## 经backbone下采样后的特征图大小
         fH, fW = ogfH // self.downsample, ogfW // self.downsample
+
+        # view(-1, 1, 1) 用于将其变形为列向量，使用.expand(-1, fH, fW)在空间维度上进行复制，相当于resize
+        # torch.arange: 用于创建一个包含等差数列的一维Tensor
+        ## 使用grid_conf属性中的dbound参数创建沿深度方向（D）的一维张量 ds。这个张量表示深度方向上的坐标。
+        ## 为特征图上的每个点生成一组深度位置，shape变化：(41,) -> (41,1,1) -> (41,8,22)，这里dbound=[4,45,1]
         ds = torch.arange(*self.grid_conf['dbound'], dtype=torch.float).view(-1, 1, 1).expand(-1, fH, fW)
+        ## D: 表示深度方向上网格的数量
         D, _, _ = ds.shape
+
+        # xs: D x fH x fW
+        ## 将每个点的x坐标映射回原图，shape变化：(22,) -> (1,1,22) -> (41,8,22)
+        ## 将每个点的y坐标映射回原图，shape变化：(8,)  -> (1,8,1)  -> (41,8,22)
+        ## 这一部分的测试参考: test_frustum.py
         xs = torch.linspace(0, ogfW - 1, fW, dtype=torch.float).view(1, 1, fW).expand(D, fH, fW)
         ys = torch.linspace(0, ogfH - 1, fH, dtype=torch.float).view(1, fH, 1).expand(D, fH, fW)
 
-        # D x H x W x 3
+        # D x H x W x 3 -> torch.Size([41, 8, 22, 3])
+        ## 堆积起来形成网格坐标, frustum[i,j,k,m]就是(i,j)位置，深度为k的像素
+        ## frustum: 实际上就是长宽深的不同组合映射
         frustum = torch.stack((xs, ys, ds), -1)
         return nn.Parameter(frustum, requires_grad=False)
 
@@ -93,19 +122,27 @@ class LiftSplat(nn.Module):
         """Determine the (x,y,z) locations (in the ego frame)
         of the points in the point cloud.
         Returns B x N x D x H/downsample x W/downsample x 3
+        将每张图的视锥点云从图像坐标系转换到自车坐标系。
+        rots: 由相机坐标系->自车坐标系的旋转矩阵，(B, N, 3, 3)
+        trans: 由相机坐标系->自车坐标系的平移矩阵，(B, N, 3)
+        intrins: 相机内参，(B, N, 3, 3)
+        post_rots: 由图像增强引起的旋转矩阵，(B, N, 3, 3)
+        post_trans: 由图像增强引起的平移矩阵，(B, N, 3)
         """
+        # B: batch, N: number of cameras
         B, N, _ = trans.shape
 
-        # *undo* post-transformation
+        # *undo* post-transformation 恢复数据增强以及预处理对像素位置的变化
         # B x N x D x H x W x 3
         points = self.frustum - post_trans.view(B, N, 1, 1, 1, 3)
         points = torch.inverse(post_rots).view(B, N, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1))
 
-        # cam_to_ego
+        # cam_to_ego 图像坐标系 -> 相机归一化坐标系
         points = torch.cat((points[:, :, :, :, :, :2] * points[:, :, :, :, :, 2:3],
                             points[:, :, :, :, :, 2:3]
                             ), 5)
         combine = rots.matmul(torch.inverse(intrins))
+
         points = combine.view(B, N, 1, 1, 1, 3, 3).matmul(points).squeeze(-1)
         points += trans.view(B, N, 1, 1, 1, 3)
 
@@ -115,15 +152,20 @@ class LiftSplat(nn.Module):
         """Return B x N x D x H/downsample x W/downsample x C
         """
         B, N, C, imH, imW = x.shape
-
         x = x.view(B*N, C, imH, imW)
         x = self.camencode(x)
         x = x.view(B, N, self.camC, self.D, imH//self.downsample, imW//self.downsample)
+        # 将不同维度以不同的维度排列 -> shape(B,N,41,8,22,64) 即channel调到了最后一位
         x = x.permute(0, 1, 3, 4, 5, 2)
 
         return x
 
     def voxel_pooling(self, geom_feats, x):
+        """
+        构建BEV特征。
+        geom_feats: 视锥点云坐标, shape为(B,N,41,8,22,3)
+        x: 图像的特征点云, shape为(B,N,41,8,22,64)
+        """
         B, N, D, H, W, C = x.shape
         Nprime = B*N*D*H*W
 
@@ -132,10 +174,14 @@ class LiftSplat(nn.Module):
 
         # flatten indices
         # B x N x D x H/downsample x W/downsample x 3
+        # 将视锥点云坐标从自车坐标系平移到BEV网格中获得其索引，BEV网格以左上角为原点
         geom_feats = ((geom_feats - (self.bx - self.dx/2.)) / self.dx).long()
         geom_feats = geom_feats.view(Nprime, 3)
+        # 每个点的batch索引，shape(Nprime,1) 其中每个元素是一个整数，表示对应的样本所在的批次索引
+        # batch_ix.size == [216480, 1]
         batch_ix = torch.cat([torch.full([Nprime//B, 1], ix, device=x.device, dtype=torch.long) for ix in range(B)])
-        geom_feats = torch.cat((geom_feats, batch_ix), 1)  # x, y, z, b
+        # geom_feats.size == [216480, 4]
+        geom_feats = torch.cat((geom_feats, batch_ix), 1)
 
         # filter out points that are outside box
         kept = (geom_feats[:, 0] >= 0) & (geom_feats[:, 0] < self.nx[0])\
@@ -145,10 +191,12 @@ class LiftSplat(nn.Module):
         geom_feats = geom_feats[kept]
 
         # get tensors from the same voxel next to each other
+        # 给每个点赋予一个rank值，rank相同的点表明落在同一个batch的同一个格子里
         ranks = geom_feats[:, 0] * (self.nx[1] * self.nx[2] * B)\
             + geom_feats[:, 1] * (self.nx[2] * B)\
             + geom_feats[:, 2] * B\
             + geom_feats[:, 3]
+        # 对ranks排序，将rank值相同的点排在一起，这么做的目的是为了后续的cumsum
         sorts = ranks.argsort()
         x, geom_feats, ranks = x[sorts], geom_feats[sorts], ranks[sorts]
 
@@ -159,10 +207,12 @@ class LiftSplat(nn.Module):
             x, geom_feats = QuickCumsum.apply(x, geom_feats, ranks)
 
         # griddify (B x C x Z x X x Y)
+        # 构建BEV特征图，shape(B, 64, 1, 200, 200)
         final = torch.zeros((B, C, self.nx[2], self.nx[1], self.nx[0]), device=x.device)
         final[geom_feats[:, 3], :, geom_feats[:, 2], geom_feats[:, 1], geom_feats[:, 0]] = x
 
         # collapse Z
+        # 消除第2维，shape(B, 64, 200, 200)
         final = torch.cat(final.unbind(dim=2), 1)
 
         return final

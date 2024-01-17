@@ -53,6 +53,7 @@ class DiscriminativeLoss(nn.Module):
             embedding_b = embedding[b]  # (embed_dim, H, W)
             seg_gt_b = seg_gt[b]
 
+            # 它用于返回输入张量中唯一的不重复元素
             labels = torch.unique(seg_gt_b)
             labels = labels[labels != 0]
             num_lanes = len(labels)

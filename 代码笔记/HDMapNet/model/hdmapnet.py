@@ -24,13 +24,16 @@ class ViewTransformation(nn.Module):
                 nn.ReLU()
             )
             self.hw_mat.append(fc_transform)
+        # nn.ModuleList() 是 PyTorch 中的一个类，用于管理神经网络模型中的子模块列表
+        # 它允许我们将多个子模块组织在一起，并将它们作为整个模型的一部分进行管理和操作
         self.hw_mat = nn.ModuleList(self.hw_mat)
 
     def forward(self, feat):
         B, N, C, H, W = feat.shape
-        feat = feat.view(B, N, C, H*W)
+        feat = feat.view(B, N, C, H * W)
         outputs = []
         for i in range(N):
+            # feat[:, i] 等价于 feat[:, i, :, :]
             output = self.hw_mat[i](feat[:, i]).view(B, C, self.bv_size[0], self.bv_size[1])
             outputs.append(output)
         outputs = torch.stack(outputs, 1)
@@ -43,6 +46,9 @@ class HDMapNet(nn.Module):
         self.camC = 64
         self.downsample = 16
 
+        # dx: 每个维度的离散化步长
+        # bx: 第一个元素加上相应步长一半的张量，然后赋值给 bx。这个张量表示每个维度的起始坐标
+        # nx: 这个张量表示每个维度上的离散化网格的长度
         dx, bx, nx = gen_dx_bx(data_conf['xbound'], data_conf['ybound'], data_conf['zbound'])
         final_H, final_W = nx[1].item(), nx[0].item()
 
@@ -52,8 +58,8 @@ class HDMapNet(nn.Module):
         self.view_fusion = ViewTransformation(fv_size=fv_size, bv_size=bv_size)
 
         res_x = bv_size[1] * 3 // 4
-        ipm_xbound = [-res_x, res_x, 4*res_x/final_W]
-        ipm_ybound = [-res_x/2, res_x/2, 2*res_x/final_H]
+        ipm_xbound = [-res_x, res_x, 4 * res_x / final_W]
+        ipm_ybound = [-res_x / 2, res_x / 2, 2 * res_x / final_H]
         self.ipm = IPM(ipm_xbound, ipm_ybound, N=6, C=self.camC, extrinsic=True)
         self.up_sampler = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         # self.up_sampler = nn.Upsample(scale_factor=5, mode='bilinear', align_corners=True)

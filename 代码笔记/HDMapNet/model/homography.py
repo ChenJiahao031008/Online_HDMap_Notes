@@ -62,6 +62,7 @@ def perspective(cam_coords, proj_mat, h, w, extrinsic, offset=None):
 
     N, _, _ = pix_coords.shape
 
+    # TODO: why offset[0] and -offset[1] / 8
     if extrinsic:
         pix_coords[:, 0] += offset[0] / 2
         pix_coords[:, 2] -= offset[1] / 8
@@ -69,6 +70,7 @@ def perspective(cam_coords, proj_mat, h, w, extrinsic, offset=None):
     else:
         pix_coords = pix_coords[:, :2, :] / (pix_coords[:, 2, :][:, None, :] + eps)
     pix_coords = pix_coords.view(N, 2, h, w)
+    # N, 2, h, w -> N, h, w, 2
     pix_coords = pix_coords.permute(0, 2, 3, 1).contiguous()
     return pix_coords
 
@@ -160,11 +162,8 @@ def plane_grid(xbound, ybound, zs, yaws, rolls, pitchs, cuda=True):
     x = x.flatten()
     y = y.flatten()
 
-    x = x.unsqueeze(0).repeat(B, 1)
+    x = x.unsqueeze(0).repeat(B, 1) # x.size = [B, num_x * num_y]
     y = y.unsqueeze(0).repeat(B, 1)
-
-    # z = torch.ones_like(x, dtype=torch.double).cuda() * zs.view(-1, 1)
-    # d = torch.ones_like(x, dtype=torch.double).cuda()
     z = torch.ones_like(x) * zs.view(-1, 1)
     d = torch.ones_like(x)
     if cuda:
@@ -202,17 +201,19 @@ def ipm_from_parameters(image, xyz, K, RT, target_h, target_w, extrinsic, post_R
 class PlaneEstimationModule(nn.Module):
     def __init__(self, N, C):
         super(PlaneEstimationModule, self).__init__()
+        # 自适应最大池化与普通最大池化的区别在于无论输入特征的大小如何，其输出特征大小由我们自己通过output_size参数指定
+        # AdaptiveMaxPool2d(out_size): 将最后两个维度重置为(out_size, out_size), 之前的维度不变
         self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.linear = nn.Linear(N*C, 3)
+        self.linear = nn.Linear(N * C, 3)
 
         self.linear.weight.data.fill_(0.)
         self.linear.bias.data.fill_(0.)
 
     def forward(self, x):
         B, N, C, H, W = x.shape
-        x = x.view(B*N, C, H, W)
+        x = x.view(B * N, C, H, W)
         x = self.max_pool(x)
-        x = x.view(B, N*C)
+        x = x.view(B, N * C)
         x = self.linear(x)
         z, pitch, roll = x[:, 0], x[:, 1], x[:, 2]
         return z, pitch, roll
@@ -241,8 +242,10 @@ class IPM(nn.Module):
         tri_mask = np.zeros((self.h, self.w))
         vertices = np.array([[0, 0], [0, self.h], [self.w, self.h]], np.int32)
         pts = vertices.reshape((-1, 1, 2))
-        cv2.fillPoly(tri_mask, [pts], color=1.)
+        cv2.fillPoly(tri_mask, [pts], color=1.) # 正三角形掩码
+        # torch.Size([1, 200, 400, 1])
         self.tri_mask = torch.tensor(tri_mask[None, :, :, None])
+        # torch.flip: 在指定维度(按y轴)上对张量进行翻转操作
         self.flipped_tri_mask = torch.flip(self.tri_mask, [2]).bool()
         if cuda:
             self.tri_mask = self.tri_mask.cuda()
@@ -259,6 +262,7 @@ class IPM(nn.Module):
         return warped_fv_images
 
     def forward(self, images, Ks, RTs, translation, yaw_roll_pitch, post_RTs=None):
+        # B, N, C, H, W -> B, N, H, W, C
         images = images.permute(0, 1, 3, 4, 2).contiguous()
         B, N, H, W, C = images.shape
 
@@ -270,14 +274,17 @@ class IPM(nn.Module):
             # zs += z
             # rolls += roll
             # pitchs += pitch
+            ## plane_grid: 重建bev的平面网格
             planes = plane_grid(self.xbound, self.ybound, zs, torch.zeros_like(rolls), rolls, pitchs)
             planes = planes.repeat(N, 1, 1)
         else:
             planes = self.planes
 
         images = images.reshape(B*N, H, W, C)
+        # 实际上是从bev映射过来的图像
         warped_fv_images = ipm_from_parameters(images, planes, Ks, RTs, self.h, self.w, self.extrinsic, post_RTs)
         warped_fv_images = warped_fv_images.reshape((B, N, self.h, self.w, C))
+        # 6个相机的可视化遮罩
         if self.visual:
             warped_fv_images = self.mask_warped(warped_fv_images)
 
@@ -289,7 +296,9 @@ class IPM(nn.Module):
             warped_topdown[warped_mask] = warped_fv_images[:, CAM_BL][warped_mask] + warped_fv_images[:, CAM_BR][warped_mask]
             return warped_topdown.permute(0, 3, 1, 2).contiguous()
         else:
+            # (B, N, self.h, self.w, C) -> (B, self.h, self.w, C)
             warped_topdown, _ = warped_fv_images.max(1)
+            # (B, self.h, self.w, C) -> (B, C, self.h, self.w)
             warped_topdown = warped_topdown.permute(0, 3, 1, 2).contiguous()
             warped_topdown = warped_topdown.view(B, C, self.h, self.w)
             return warped_topdown

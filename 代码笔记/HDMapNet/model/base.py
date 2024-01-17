@@ -23,7 +23,7 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        x1 = torch.cat([x2, x1], dim=1)
+        x1 = torch.cat([x2, x1], dim=1) # torch.cat：将两个张量（tensor）拼接在一起
         return self.conv(x1)
 
 
@@ -36,24 +36,32 @@ class CamEncode(nn.Module):
         self.up1 = Up(320+112, self.C)
 
     def get_eff_depth(self, x):
+        # 使用efficientnet提取特征
         # adapted from https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py#L231
+
+        ## 用于存储中间特征图
         endpoints = dict()
 
-        # Stem
+        ## 执行一系列操作，包括批归一化 (self.trunk._bn0)、使用 Swish 激活函数 (self.trunk._swish) 和卷积 (self.trunk._conv_stem)
         x = self.trunk._swish(self.trunk._bn0(self.trunk._conv_stem(x)))
+        ## 将当前特征图 x 分配给 prev_x，用于跟踪上一个特征图的大小以进行下采样。
         prev_x = x
 
-        # Blocks
+        ## Blocks: 迭代 EfficientNet 模型的各个块
         for idx, block in enumerate(self.trunk._blocks):
+            ## 从模型的全局参数中获取 drop connect 比率
             drop_connect_rate = self.trunk._global_params.drop_connect_rate
             if drop_connect_rate:
+                ## 则根据当前块的索引对其进行缩放，为每个块提供不同的 drop connect 比率。这有助于随机深度正则化。
                 drop_connect_rate *= float(idx) / len(self.trunk._blocks)  # scale drop connect_rate
             x = block(x, drop_connect_rate=drop_connect_rate)
+            ## 如果上一个特征图的尺寸大于当前特征图的大小，将其存储在 endpoints 字典中（保存下采样）
             if prev_x.size(2) > x.size(2):
                 endpoints['reduction_{}'.format(len(endpoints)+1)] = prev_x
             prev_x = x
 
         # Head
+        ## 将最终的特征图 x 存储在 endpoints 字典中
         endpoints['reduction_{}'.format(len(endpoints)+1)] = x
         x = self.up1(endpoints['reduction_5'], endpoints['reduction_4'])
         return x
@@ -61,7 +69,8 @@ class CamEncode(nn.Module):
     def forward(self, x):
         return self.get_eff_depth(x)
 
-
+# 为了执行语义分割任务，最后还接个BevEncode对BEV特征进一步进行编码
+# BevEncode由一个2d Conv、resnet18的前三层、以及两个上采样层组成
 class BevEncode(nn.Module):
     def __init__(self, inC, outC, instance_seg=True, embedded_dim=16, direction_pred=True, direction_dim=37):
         super(BevEncode, self).__init__()
@@ -75,6 +84,8 @@ class BevEncode(nn.Module):
         self.layer2 = trunk.layer2
         self.layer3 = trunk.layer3
 
+        # self.up1, self.up1_embedded，self.up1_direction 完全一致
+        # self.up2, self.up2_embedded，self.up2_direction 除了最后输出维度不一致
         self.up1 = Up(64 + 256, 256, scale_factor=4)
         self.up2 = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear',

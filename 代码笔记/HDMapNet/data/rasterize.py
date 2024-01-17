@@ -35,7 +35,7 @@ def mask_for_lines(lines, mask, thickness, idx, type="index", angle_class=36):
     coords = coords.reshape((-1, 2))
     if len(coords) < 2:
         return mask, idx
-    # TODO 不明白为什么要反向
+    # 正向一次，反向一次，保证得到的结果从正向和反向都能验证
     if type == "backward":
         coords = np.flip(coords, 0)
 
@@ -98,7 +98,10 @@ def line_geom_to_mask(
                 new_line, xfact=scale_width, yfact=scale_height, origin=(0, 0)
             )
             confidence_levels.append(confidence)
-            # type1 == 'index', type2 == ''
+            # type1  == 'index' , type2  == 'index', type3  == 'forward', type4  == 'backward'
+            # index1 == idx++(1), index2 == 1      , index3 == 1        , index4 == 1
+            # 上述index是初始值，mask_for_lines function 中 type == 'index' index会自动加1
+            # instance_masks 和 filter_masks 区别在于 index 是每次从1开始还是继承下去
             if new_line.geom_type == "MultiLineString":
                 for new_single_line in new_line:
                     map_mask, idx = mask_for_lines(
@@ -112,11 +115,14 @@ def line_geom_to_mask(
 
 
 def overlap_filter(mask, filter_mask):
+    # C 是通道数
     C, _, _ = mask.shape
     for c in range(C - 1, -1, -1):
+        ## 将重复操作施加到 维度‘axis=0’上，相当于增加行数，重复c次
         filter = np.repeat((filter_mask[c] != 0)[None, :], c, axis=0)
+        # 将掩码 mask 中前 c 个通道中满足条件的区域（由 filter 控制）的值设为零
+        # 这样就实现了根据 filter_mask 进行过滤的功能，只保留了满足条件的通道。
         mask[:c][filter] = 0
-
     return mask
 
 
@@ -139,10 +145,10 @@ def preprocess_map(
     local_box = (0.0, 0.0, patch_size[0], patch_size[1])
 
     idx = 1
-    filter_masks = []
-    instance_masks = []
-    forward_masks = []
-    backward_masks = []
+    instance_masks = []  # 每个实例的掩码，每个实例中也包含很多线
+    filter_masks = []    # 每条线的掩码
+    forward_masks = []   # 正向朝向的掩码
+    backward_masks = []  # 逆向朝向的掩码
     # 注意，遍历的是类别
     for i in range(num_classes):
         map_mask, idx = line_geom_to_mask(
@@ -153,8 +159,8 @@ def preprocess_map(
             thickness,
             idx,
         )
-
         instance_masks.append(map_mask)
+
         filter_mask, _ = line_geom_to_mask(
             vector_num_list[i],
             confidence_levels,
@@ -164,6 +170,7 @@ def preprocess_map(
             1,
         )
         filter_masks.append(filter_mask)
+
         forward_mask, _ = line_geom_to_mask(
             vector_num_list[i],
             confidence_levels,

@@ -53,8 +53,15 @@ def train(args):
     model = get_model(args.model, data_conf, args.instance_seg, args.embedding_dim, args.direction_pred, args.angle_class)
 
     if args.finetune:
+        '''
+        model.load_state_dict: 加载预训练模型的权重
+        @ args.modelf 是预训练模型的文件路径
+        @ load_state_dict 函数加载模型的状态字典
+        @ strict=False 表示允许加载不匹配的键。
+        '''
         model.load_state_dict(torch.load(args.modelf), strict=False)
         for name, param in model.named_parameters():
+            # 需要微调的部分
             if 'bevencode.up' in name or 'bevencode.layer3' in name:
                 param.requires_grad = True
             else:
@@ -65,8 +72,12 @@ def train(args):
     sched = StepLR(opt, 10, 0.1)
     writer = SummaryWriter(logdir=args.logdir)
 
+    # SimpleLoss 实际上是 BCEWithLogitsLoss，即二元交叉熵损失函数，常用于二分类问题
+    # BCEWithLogitsLoss，它结合了 Sigmoid 层和 BCELoss，以提供更稳定的梯度
     loss_fn = SimpleLoss(args.pos_weight).cuda()
+    # 这个是lanenet的损失函数
     embedded_loss_fn = DiscriminativeLoss(args.embedding_dim, args.delta_v, args.delta_d).cuda()
+    # 实际使用时前面加上了torch.softmax(direction, 1)
     direction_loss_fn = torch.nn.BCELoss(reduction='none')
 
     model.train()
@@ -167,7 +178,8 @@ if __name__ == '__main__':
     parser.add_argument('--modelf', type=str, default=None)
 
     # data config
-    ## TODO: what does 'dbound', 'thickness' mean?
+    ## TODO: what does 'thickness' mean?
+    ## 'dbound': 视锥深度方向变化
     parser.add_argument("--thickness", type=int, default=5)
     parser.add_argument("--image_size", nargs=2, type=int, default=[128, 352])
     parser.add_argument("--xbound", nargs=3, type=float, default=[-30.0, 30.0, 0.15])
