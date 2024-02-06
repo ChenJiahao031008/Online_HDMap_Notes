@@ -39,6 +39,8 @@ fixed_ptsnum_per_pred_line = 20
 eval_use_same_gt_sample_num_flag=True
 num_map_classes = len(map_classes)
 
+# input_modality: 输入模态
+## TODO: use_external: what?
 input_modality = dict(
     use_lidar=False,
     use_camera=True,
@@ -179,13 +181,13 @@ model = dict(
             loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=0.0),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0),
-        loss_pts=dict(type='PtsL1Loss', 
+        loss_pts=dict(type='PtsL1Loss',
                       loss_weight=5.0),
         loss_dir=dict(type='PtsDirCosLoss', loss_weight=0.005),
-        loss_seg=dict(type='SimpleLoss', 
+        loss_seg=dict(type='SimpleLoss',
             pos_weight=4.0,
             loss_weight=1.0),
-        loss_pv_seg=dict(type='SimpleLoss', 
+        loss_pv_seg=dict(type='SimpleLoss',
                     pos_weight=1.0,
                     loss_weight=2.0),),
     # model training and testing settings
@@ -201,7 +203,7 @@ model = dict(
             # reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
             # iou_cost=dict(type='IoUCost', weight=1.0), # Fake cost. This is just to make it compatible with DETR head.
             iou_cost=dict(type='IoUCost', iou_mode='giou', weight=0.0),
-            pts_cost=dict(type='OrderedPtsL1Cost', 
+            pts_cost=dict(type='OrderedPtsL1Cost',
                       weight=5),
             pc_range=point_cloud_range))))
 
@@ -222,7 +224,7 @@ train_pipeline = [
         use_dim=5,
         file_client_args=file_client_args),
     dict(type='CustomPointToMultiViewDepth', downsample=1, grid_config=grid_config),
-    dict(type='PadMultiViewImageDepth', size_divisor=32), 
+    dict(type='PadMultiViewImageDepth', size_divisor=32),
     dict(type='DefaultFormatBundle3D', with_gt=False, with_label=False,class_names=map_classes),
     dict(type='CustomCollect3D', keys=['img', 'gt_depth'])
 ]
@@ -231,7 +233,7 @@ test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
     dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-   
+
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1600, 900),
@@ -240,8 +242,8 @@ test_pipeline = [
         transforms=[
             dict(type='PadMultiViewImage', size_divisor=32),
             dict(
-                type='DefaultFormatBundle3D', 
-                with_gt=False, 
+                type='DefaultFormatBundle3D',
+                with_gt=False,
                 with_label=False,
                 class_names=map_classes),
             dict(type='CustomCollect3D', keys=['img'])
@@ -288,14 +290,14 @@ data = dict(
         data_root=data_root,
         ann_file=data_root + 'nuscenes_map_infos_temporal_val.pkl',
         map_ann_file=data_root + 'nuscenes_map_anns_val.json',
-        pipeline=test_pipeline, 
+        pipeline=test_pipeline,
         bev_size=(bev_h_, bev_w_),
         pc_range=point_cloud_range,
         fixed_ptsnum_per_line=fixed_ptsnum_per_gt_line,
         eval_use_same_gt_sample_num_flag=eval_use_same_gt_sample_num_flag,
         padding_value=-10000,
         map_classes=map_classes,
-        classes=class_names, 
+        classes=class_names,
         modality=input_modality),
     shuffler_sampler=dict(type='DistributedGroupSampler'),
     nonshuffler_sampler=dict(type='DistributedSampler')
